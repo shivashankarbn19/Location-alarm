@@ -32,33 +32,62 @@ export default function LocationAlarm() {
 
   // Function to get current location
   const getCurrentLocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setCurrentLocation({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          })
-          toast({
-            title: "Location detected",
-            description: "Your current location has been detected.",
-          })
-        },
-        (error) => {
-          toast({
-            variant: "destructive",
-            title: "Location error",
-            description: `Failed to get location: ${error.message}`,
-          })
-        },
-      )
-    } else {
+    if (!navigator.geolocation) {
       toast({
         variant: "destructive",
         title: "Geolocation not supported",
         description: "Your browser doesn't support geolocation.",
       })
+      return
     }
+
+    // Show loading toast
+    toast({
+      title: "Detecting location",
+      description: "Please wait while we detect your location...",
+    })
+
+    // Set options for better accuracy
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setCurrentLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        })
+        toast({
+          title: "Location detected",
+          description: "Your current location has been detected.",
+        })
+      },
+      (error) => {
+        let errorMessage = "Failed to get location"
+
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage = "Location permission denied. Please enable location services in your browser settings."
+            break
+          case error.POSITION_UNAVAILABLE:
+            errorMessage = "Location information is unavailable. Please try again."
+            break
+          case error.TIMEOUT:
+            errorMessage = "Location request timed out. Please try again."
+            break
+        }
+
+        toast({
+          variant: "destructive",
+          title: "Location error",
+          description: errorMessage,
+        })
+      },
+      options,
+    )
   }
 
   // Function to set target location
@@ -127,7 +156,25 @@ export default function LocationAlarm() {
 
   // Function to start watching location
   const startWatchingLocation = () => {
-    if (navigator.geolocation && !isWatchingLocation) {
+    if (!navigator.geolocation) {
+      toast({
+        variant: "destructive",
+        title: "Geolocation not supported",
+        description: "Your browser doesn't support geolocation.",
+      })
+      return
+    }
+
+    if (isWatchingLocation) return
+
+    // Options for better accuracy
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    }
+
+    try {
       const id = navigator.geolocation.watchPosition(
         (position) => {
           const newLocation = {
@@ -138,16 +185,39 @@ export default function LocationAlarm() {
           checkProximity(newLocation)
         },
         (error) => {
+          let errorMessage = "Failed to track location"
+
+          switch (error.code) {
+            case error.PERMISSION_DENIED:
+              errorMessage = "Location permission denied. Please enable location services."
+              break
+            case error.POSITION_UNAVAILABLE:
+              errorMessage = "Location information is unavailable."
+              break
+            case error.TIMEOUT:
+              errorMessage = "Location request timed out."
+              break
+          }
+
           toast({
             variant: "destructive",
             title: "Location tracking error",
-            description: `Failed to track location: ${error.message}`,
+            description: errorMessage,
           })
           stopWatchingLocation()
         },
+        options,
       )
+
       setWatchId(id)
       setIsWatchingLocation(true)
+    } catch (error) {
+      console.error("Error starting location watch:", error)
+      toast({
+        variant: "destructive",
+        title: "Location tracking error",
+        description: "Failed to start location tracking.",
+      })
     }
   }
 
@@ -220,6 +290,36 @@ export default function LocationAlarm() {
       }
     }
   }, [])
+
+  // This handles the case when the app is put in the background
+  useEffect(() => {
+    // Handle page visibility change
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Page is hidden (app in background)
+        if (isAlarmActive && isWatchingLocation) {
+          // Store that we were watching
+          localStorage.setItem("wasWatchingLocation", "true")
+          // Stop watching to save battery
+          stopWatchingLocation()
+        }
+      } else {
+        // Page is visible again
+        const wasWatching = localStorage.getItem("wasWatchingLocation") === "true"
+        if (isAlarmActive && wasWatching && !isWatchingLocation) {
+          // Resume watching
+          startWatchingLocation()
+          localStorage.removeItem("wasWatchingLocation")
+        }
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [isAlarmActive, isWatchingLocation])
 
   return (
     <div className="container max-w-md mx-auto p-4">
@@ -308,7 +408,10 @@ export default function LocationAlarm() {
           )}
 
           {isAlarmTriggered && (
-            <div className="bg-red-100 dark:bg-red-900/30 p-4 rounded-md flex items-center gap-3 animate-pulse">
+            <div
+              className="bg-red-100 dark:bg-red-900/30 p-4 rounded-md flex items-center gap-3 animate-pulse"
+              onClick={stopAlarm}
+            >
               <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
               <div>
                 <p className="font-medium text-red-600 dark:text-red-400">You've reached {targetLocation?.name}!</p>
